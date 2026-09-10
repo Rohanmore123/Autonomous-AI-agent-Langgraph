@@ -1,0 +1,1 @@
+"""app/__init__.py — LLM Agentic Platform root package."""

@@ -1,0 +1,283 @@
+{
+  "__comment": "Grafana Dashboard — LLM Agentic Platform",
+  "__instructions": "Import this JSON at Grafana > Dashboards > Import. Set Prometheus as data source.",
+  "title": "LLM Agentic Platform — Production Overview",
+  "uid": "llm-platform-overview",
+  "version": 1,
+  "schemaVersion": 38,
+  "refresh": "30s",
+  "time": { "from": "now-3h", "to": "now" },
+  "tags": ["llm", "production", "ai"],
+  "templating": {
+    "list": [
+      {
+        "name": "provider",
+        "type": "query",
+        "query": "label_values(llm_requests_total, provider)",
+        "label": "LLM Provider",
+        "multi": true,
+        "includeAll": true
+      },
+      {
+        "name": "agent",
+        "type": "query",
+        "query": "label_values(agent_runs_total, agent_type)",
+        "label": "Agent Type",
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "🟢 API Request Rate (req/s)",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "sum(rate(http_requests_total[1m]))",
+        "legendFormat": "req/s"
+      }],
+      "options": { "colorMode": "background", "graphMode": "area" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 500 },
+              { "color": "red", "value": 1000 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "❌ Error Rate (%)",
+      "type": "stat",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "sum(rate(http_requests_total{status=~'5..'}[5m])) / sum(rate(http_requests_total[5m])) * 100",
+        "legendFormat": "error %"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "⏱ P95 API Latency (ms)",
+      "type": "stat",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le)) * 1000",
+        "legendFormat": "p95 ms"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 2000 },
+              { "color": "red", "value": 10000 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "💰 LLM Cost Today (USD)",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "sum(increase(llm_cost_usd_total[24h]))",
+        "legendFormat": "USD"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "red", "value": 200 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "🎯 Cache Hit Rate (%)",
+      "type": "stat",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "sum(rate(cache_hits_total{hit='true'}[10m])) / sum(rate(cache_hits_total[10m])) * 100",
+        "legendFormat": "hit rate"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 20 },
+              { "color": "green", "value": 40 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "👥 Active Users (last 5m)",
+      "type": "stat",
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "targets": [{
+        "expr": "count(count by (user_id) (http_requests_total))",
+        "legendFormat": "users"
+      }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 10,
+      "title": "📈 Request Rate by Status Code",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{status=~'2..'}[1m]))",
+          "legendFormat": "2xx (success)"
+        },
+        {
+          "expr": "sum(rate(http_requests_total{status=~'4..'}[1m]))",
+          "legendFormat": "4xx (client error)"
+        },
+        {
+          "expr": "sum(rate(http_requests_total{status=~'5..'}[1m]))",
+          "legendFormat": "5xx (server error)"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "fillOpacity": 10 }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "2xx (success)" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "4xx (client error)" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "5xx (server error)" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      }
+    },
+    {
+      "id": 11,
+      "title": "🤖 LLM Latency Percentiles",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(llm_request_duration_seconds_bucket{provider=~'$provider'}[5m])) by (le)) * 1000",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(llm_request_duration_seconds_bucket{provider=~'$provider'}[5m])) by (le)) * 1000",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(llm_request_duration_seconds_bucket{provider=~'$provider'}[5m])) by (le)) * 1000",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+      "id": 20,
+      "title": "🤖 Agent Invocations by Type",
+      "type": "piechart",
+      "gridPos": { "x": 0, "y": 12, "w": 8, "h": 8 },
+      "targets": [{
+        "expr": "sum(increase(agent_runs_total[24h])) by (agent_type)",
+        "legendFormat": "{{ agent_type }}"
+      }]
+    },
+    {
+      "id": 21,
+      "title": "📊 Token Usage (input vs output)",
+      "type": "timeseries",
+      "gridPos": { "x": 8, "y": 12, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(llm_tokens_total{token_type='input'}[5m]))",
+          "legendFormat": "input tokens/s"
+        },
+        {
+          "expr": "sum(rate(llm_tokens_total{token_type='output'}[5m]))",
+          "legendFormat": "output tokens/s"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 22,
+      "title": "💰 Cost by Provider (last 24h)",
+      "type": "bargauge",
+      "gridPos": { "x": 16, "y": 12, "w": 8, "h": 8 },
+      "targets": [{
+        "expr": "sum(increase(llm_cost_usd_total[24h])) by (provider)",
+        "legendFormat": "{{ provider }}"
+      }],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } }
+    },
+    {
+      "id": 30,
+      "title": "🗄 PostgreSQL Connections",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 20, "w": 8, "h": 6 },
+      "targets": [{
+        "expr": "pg_stat_database_numbackends{datname='llm_platform'}",
+        "legendFormat": "active connections"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "steps": [{ "color": "green" }, { "color": "yellow", "value": 150 }, { "color": "red", "value": 200 }] }
+        }
+      }
+    },
+    {
+      "id": 31,
+      "title": "📦 Redis Memory Usage",
+      "type": "timeseries",
+      "gridPos": { "x": 8, "y": 20, "w": 8, "h": 6 },
+      "targets": [{
+        "expr": "redis_memory_used_bytes",
+        "legendFormat": "used"
+      }],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "id": 32,
+      "title": "🚦 Rate Limit Hits",
+      "type": "timeseries",
+      "gridPos": { "x": 16, "y": 20, "w": 8, "h": 6 },
+      "targets": [{
+        "expr": "sum(rate(rate_limit_hits_total[1m])) by (window)",
+        "legendFormat": "{{ window }}"
+      }],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    }
+  ]
+}

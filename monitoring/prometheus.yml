@@ -1,0 +1,112 @@
+# monitoring/prometheus.yml
+# ==========================
+# Prometheus scrape configuration for the LLM Platform.
+#
+# WHAT PROMETHEUS DOES:
+#   Prometheus is a pull-based metrics system. Every 15 seconds it sends
+#   HTTP GET requests to the /metrics endpoints of configured targets
+#   and stores the time-series data in its local TSDB.
+#
+# SCRAPE TARGETS:
+#   llm-api        → FastAPI app metrics (requests, latency, tokens, cost)
+#   celery-flower  → Celery worker queue metrics
+#   node-exporter  → Host-level metrics (CPU, memory, disk, network)
+#   redis-exporter → Redis memory, connections, hit rate
+#   postgres       → PostgreSQL query stats, connections, bloat
+#   weaviate       → Vector DB query latency and object counts
+#
+# ALERTING:
+#   Prometheus evaluates alert rules every 15s.
+#   Alerts fire to Alertmanager which routes to PagerDuty / Slack / email.
+
+global:
+  scrape_interval:     15s   # How often to scrape each target
+  evaluation_interval: 15s   # How often to evaluate alert rules
+  scrape_timeout:      10s   # Per-scrape timeout
+
+  # Labels attached to every metric (useful in multi-cluster setups)
+  external_labels:
+    environment: production
+    platform:    llm-platform
+    region:      us-east-1
+
+# Alertmanager connection
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load alert rules
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+# Scrape configurations
+scrape_configs:
+
+  # ── LLM API (FastAPI) ──────────────────────────────────────────────────
+  - job_name: llm-api
+    static_configs:
+      - targets:
+          - llm-api:8000
+        labels:
+          service: api
+    metrics_path: /metrics
+    scheme: http
+    # Relabeling: add instance label = container name
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # ── Celery Flower (worker monitoring UI) ───────────────────────────────
+  - job_name: celery-flower
+    static_configs:
+      - targets:
+          - flower:5555
+        labels:
+          service: celery
+    metrics_path: /metrics
+
+  # ── Redis Exporter ─────────────────────────────────────────────────────
+  - job_name: redis
+    static_configs:
+      - targets:
+          - redis-exporter:9121
+        labels:
+          service: redis
+    metrics_path: /metrics
+
+  # ── PostgreSQL Exporter ────────────────────────────────────────────────
+  - job_name: postgres
+    static_configs:
+      - targets:
+          - postgres-exporter:9187
+        labels:
+          service: postgres
+    metrics_path: /metrics
+
+  # ── Node Exporter (host metrics) ───────────────────────────────────────
+  - job_name: node
+    static_configs:
+      - targets:
+          - node-exporter:9100
+        labels:
+          service: host
+    metrics_path: /metrics
+
+  # ── Weaviate ───────────────────────────────────────────────────────────
+  - job_name: weaviate
+    static_configs:
+      - targets:
+          - weaviate:2112
+        labels:
+          service: weaviate
+    metrics_path: /metrics
+
+  # ── Prometheus self-monitoring ─────────────────────────────────────────
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - localhost:9090
+        labels:
+          service: prometheus

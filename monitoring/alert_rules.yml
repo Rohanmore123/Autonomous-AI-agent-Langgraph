@@ -1,0 +1,227 @@
+# monitoring/alert_rules.yml
+# ============================
+# Prometheus alerting rules for the LLM Platform.
+#
+# SEVERITY LEVELS:
+#   critical — page on-call immediately (PagerDuty P1)
+#   warning  — Slack notification, acknowledge within 1 hour
+#   info     — dashboard annotation, no notification
+#
+# ALERTING PHILOSOPHY:
+#   Alert on SYMPTOMS, not causes:
+#     ✓ "API error rate > 5%"        (user-facing symptom)
+#     ✗ "CPU usage > 80%"            (cause — may be fine)
+#   Alert on SLO violations:
+#     P99 latency > 10s for 5 minutes = SLO breach = page
+#   Dead-man's switch:
+#     "LLM platform is down" fires if no metrics received for 2 minutes
+
+groups:
+
+  # ── API Health ────────────────────────────────────────────────────────
+  - name: api_health
+    interval: 15s
+    rules:
+
+      - alert: APIHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API error rate above 5%"
+          description: "{{ $value | humanizePercentage }} of requests are returning 5xx errors."
+          runbook: "https://wiki.internal/runbooks/api-errors"
+
+      - alert: APIHighLatencyP99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, path)
+          ) > 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "P99 API latency > 10 seconds"
+          description: "Path {{ $labels.path }} p99 latency is {{ $value }}s. SLO breach."
+
+      - alert: APIDown
+        expr: up{job="llm-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "LLM API is down"
+          description: "The LLM API has been unreachable for more than 1 minute."
+
+      - alert: HighRequestRate
+        expr: sum(rate(http_requests_total[1m])) > 5000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unusually high request rate"
+          description: "{{ $value | humanize }} req/s — possible traffic spike or DDoS."
+
+  # ── LLM Provider Health ────────────────────────────────────────────────
+  - name: llm_health
+    interval: 30s
+    rules:
+
+      - alert: LLMHighFallbackRate
+        expr: |
+          (
+            sum(rate(llm_requests_total{used_fallback="true"}[10m]))
+            /
+            sum(rate(llm_requests_total[10m]))
+          ) > 0.20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM fallback rate > 20%"
+          description: >
+            {{ $value | humanizePercentage }} of LLM calls are hitting the fallback provider.
+            Primary provider may be degraded.
+
+      - alert: LLMHighLatency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(llm_request_duration_seconds_bucket[5m])) by (le, provider)
+          ) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM P95 latency > 30 seconds"
+          description: "Provider {{ $labels.provider }} P95 latency is {{ $value }}s."
+
+      - alert: LLMCostSpike
+        expr: |
+          sum(increase(llm_cost_usd_total[1h])) > 50
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "LLM cost spike: $50+ in the last hour"
+          description: "${{ $value }} spent on LLM in the last hour. Check for runaway jobs."
+
+      - alert: LLMCacheHitRateLow
+        expr: |
+          (
+            sum(rate(cache_hits_total{hit="true"}[10m]))
+            /
+            sum(rate(cache_hits_total[10m]))
+          ) < 0.20
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "LLM cache hit rate below 20%"
+          description: "Cache is underperforming. Check if cache TTL or key strategy needs tuning."
+
+  # ── Infrastructure ─────────────────────────────────────────────────────
+  - name: infrastructure
+    interval: 30s
+    rules:
+
+      - alert: PostgresDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+
+      - alert: PostgresHighConnections
+        expr: |
+          pg_stat_database_numbackends{datname="llm_platform"}
+          / pg_settings_max_connections > 0.80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL connection pool > 80%"
+          description: "{{ $value | humanizePercentage }} of max connections in use."
+
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+
+      - alert: RedisHighMemory
+        expr: |
+          redis_memory_used_bytes / redis_memory_max_bytes > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis memory usage > 85%"
+
+      - alert: WeaviateDown
+        expr: up{job="weaviate"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Weaviate vector DB is down"
+          description: "RAG functionality will be unavailable until Weaviate recovers."
+
+      - alert: HighDiskUsage
+        expr: |
+          (node_filesystem_size_bytes - node_filesystem_avail_bytes)
+          / node_filesystem_size_bytes > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage > 85%"
+          description: "{{ $labels.mountpoint }}: {{ $value | humanizePercentage }} full."
+
+  # ── Celery Workers ─────────────────────────────────────────────────────
+  - name: celery
+    interval: 30s
+    rules:
+
+      - alert: CeleryQueueBacklog
+        expr: flower_events_total{type="task-received"} - flower_events_total{type="task-succeeded"} > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Celery queue backlog > 100 tasks"
+          description: "Background task queue is backing up. Consider scaling workers."
+
+      - alert: CeleryHighFailureRate
+        expr: |
+          rate(flower_events_total{type="task-failed"}[10m])
+          / rate(flower_events_total{type="task-received"}[10m]) > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Celery task failure rate > 10%"
+
+  # ── Rate Limiting ──────────────────────────────────────────────────────
+  - name: rate_limiting
+    interval: 30s
+    rules:
+
+      - alert: HighRateLimitHits
+        expr: sum(rate(rate_limit_hits_total[5m])) > 50
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate limit hit rate: >50/min"
+          description: "Many users hitting rate limits. Consider adjusting limits or scaling."

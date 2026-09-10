@@ -1,0 +1,156 @@
+# monitoring/alertmanager.yml
+# =============================
+# Alertmanager routes Prometheus alerts to the right notification channel.
+#
+# ROUTING TREE:
+#   All alerts →
+#     severity=critical  → PagerDuty (immediate on-call page)
+#     severity=warning   → Slack #alerts-warning channel
+#     severity=info      → Slack #alerts-info channel (low priority)
+#
+# GROUPING:
+#   Alerts are grouped by alertname + service so a cascade of 50 related
+#   alerts becomes ONE notification instead of 50 pages.
+#
+# INHIBITION:
+#   If PostgresDown fires, suppress PostgresHighConnections.
+#   If APIDown fires, suppress APIHighErrorRate and APIHighLatencyP99.
+#   This prevents alert storms masking the root cause.
+global:
+  resolve_timeout: 5m
+  slack_api_url_file: /etc/alertmanager/secrets/slack_webhook
+  pagerduty_url: "https://events.pagerduty.com/v2/enqueue"
+
+route:
+  receiver: default-receiver
+
+  group_by:
+    - alertname
+    - service
+    - environment
+
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+  routes:
+
+    # Critical → PagerDuty
+    - matchers:
+        - severity="critical"
+      receiver: pagerduty-critical
+      group_wait: 10s
+      repeat_interval: 1h
+      continue: true
+
+    # Critical → Slack
+    - matchers:
+        - severity="critical"
+      receiver: slack-critical
+
+    # Warning → Slack
+    - matchers:
+        - severity="warning"
+      receiver: slack-warning
+      repeat_interval: 6h
+
+    # Info → Slack
+    - matchers:
+        - severity="info"
+      receiver: slack-info
+      repeat_interval: 24h
+
+
+receivers:
+
+  - name: default-receiver
+    slack_configs:
+      - channel: "#alerts-default"
+        title: "{{ .GroupLabels.alertname }}"
+        text: |
+          {{ range .Alerts }}
+          {{ .Annotations.summary }}
+          {{ end }}
+
+  - name: pagerduty-critical
+    pagerduty_configs:
+      - routing_key_file: /etc/alertmanager/secrets/pagerduty_routing_key
+        severity: critical
+        description: "{{ .GroupLabels.alertname }}: {{ .CommonAnnotations.summary }}"
+        details:
+          environment: "{{ .CommonLabels.environment }}"
+          service: "{{ .CommonLabels.service }}"
+          description: "{{ .CommonAnnotations.description }}"
+          runbook: "{{ .CommonAnnotations.runbook }}"
+
+  - name: slack-critical
+    slack_configs:
+      - channel: "#alerts-critical"
+        username: "LLM Platform Alertmanager"
+        icon_emoji: ":rotating_light:"
+        color: "danger"
+        title: ":red_circle: CRITICAL: {{ .GroupLabels.alertname }}"
+        text: |
+          *Summary*: {{ .CommonAnnotations.summary }}
+          *Description*: {{ .CommonAnnotations.description }}
+          *Environment*: {{ .CommonLabels.environment }}
+          *Service*: {{ .CommonLabels.service }}
+          *Runbook*: {{ .CommonAnnotations.runbook }}
+        send_resolved: true
+
+  - name: slack-warning
+    slack_configs:
+      - channel: "#alerts-warning"
+        username: "LLM Platform Alertmanager"
+        icon_emoji: ":warning:"
+        color: "warning"
+        title: ":warning: WARNING: {{ .GroupLabels.alertname }}"
+        text: |
+          *Summary*: {{ .CommonAnnotations.summary }}
+          *Description*: {{ .CommonAnnotations.description }}
+        send_resolved: true
+
+  - name: slack-info
+    slack_configs:
+      - channel: "#alerts-info"
+        username: "LLM Platform Alertmanager"
+        icon_emoji: ":information_source:"
+        color: "good"
+        title: ":info: {{ .GroupLabels.alertname }}"
+        text: "{{ .CommonAnnotations.summary }}"
+        send_resolved: false
+
+
+inhibit_rules:
+
+  # PostgreSQL down → suppress connection alerts
+  - source_matchers:
+      - alertname="PostgresDown"
+    target_matchers:
+      - alertname="PostgresHighConnections"
+    equal:
+      - environment
+
+  # API down → suppress error rate and latency alerts
+  - source_matchers:
+      - alertname="APIDown"
+    target_matchers:
+      - alertname=~"APIHighErrorRate|APIHighLatencyP99"
+    equal:
+      - environment
+
+  # Redis down → suppress memory alerts
+  - source_matchers:
+      - alertname="RedisDown"
+    target_matchers:
+      - alertname="RedisHighMemory"
+    equal:
+      - environment
+
+  # Weaviate down → suppress vector search latency alerts
+  - source_matchers:
+      - alertname="WeaviateDown"
+    target_matchers:
+      - alertname=~"VectorSearchHighLatency|VectorSearchLatencyP99"
+    equal:
+      - environment
